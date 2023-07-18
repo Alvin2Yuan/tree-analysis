@@ -12,6 +12,8 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <proguard.version>7.1.1</proguard.version>
+    <proguard.maven.plugin.version>2.5.1</proguard.maven.plugin.version>
   </properties>
 
   <dependencies>
@@ -31,10 +33,11 @@
       <artifactId>hutool-poi</artifactId>
       <version>5.8.18</version>
     </dependency>
+
     <dependency>
       <groupId>org.apache.poi</groupId>
       <artifactId>poi-ooxml</artifactId>
-      <version>5.2.3</version>
+      <version>4.1.2</version>
     </dependency>
     <dependency>
       <groupId>org.apache.logging.log4j</groupId>
@@ -46,9 +49,88 @@
       <artifactId>fastjson</artifactId>
       <version>2.0.31</version>
     </dependency>
+
+    <dependency>
+      <groupId>commons-io</groupId>
+      <artifactId>commons-io</artifactId>
+      <version>2.13.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.slong.auth</groupId>
+      <artifactId>auth-client</artifactId>
+      <version>1.0</version>
+    </dependency>
   </dependencies>
   <build>
   <plugins>
+    <plugin>
+      <groupId>com.github.wvengen</groupId>
+      <artifactId>proguard-maven-plugin</artifactId>
+      <version>${proguard.maven.plugin.version}</version>
+      <executions>
+        <execution>
+          <phase>package</phase>
+          <goals>
+            <goal>proguard</goal>
+          </goals>
+        </execution>
+      </executions>
+      <configuration>
+        <proguardVersion>${proguard.version}</proguardVersion>
+        <injar>${project.build.finalName}.jar</injar>
+        <outjar>${project.build.finalName}.jar</outjar>
+        <obfuscate>true</obfuscate>
+        <options>
+          <option>-dontshrink</option>
+          <option>-dontoptimize</option>
+          <!-- 此选项将用新的类名替换反射方法调用中的所有字符串。例如，调用Class.forName('className')-->
+          <option>-adaptclassstrings</option>
+          <!-- 此选项将保存所有原始注解等。否则，将从文件中删除所有注解。-->
+          <option>-keepattributes
+            Exceptions,
+            InnerClasses,
+            Signature,
+            Deprecated,
+            SourceFile,
+            LineNumberTable,
+            *Annotation*,
+            EnclosingMethod
+          </option>
+          <!-- 此选项将保存接口中的所有原始名称（不混淆）-->
+          <option>-keepnames interface **</option>
+          <!-- 此选项将将所有原始方法参数-->
+          <option>-keepparameternames</option>
+          <!-- 此选项将保存所有原始类文件（不混淆），一般是混淆领域或者服务包中的文件。-->
+          <option>-keep
+            class com.slong.tools.App {
+            public static void main(java.lang.String[]);
+            }
+          </option>
+          <!-- 此选项忽略警告，例如重复的类定义和命名不正确的文件中的类-->
+          <option>-ignorewarnings</option>
+          <!-- 此选项将保存服务包中的所有原始类文件（不进行混淆）-->
+          <!-- <option>-keep class com.slong.proguard.service { *; }</option>-->
+          <!-- 此选项将保存所有软件包中的所有原始接口文件（不进行混淆）-->
+          <option>-keep interface * extends * { *; }</option>
+          <!-- 此选项将保存所有包中所有类中的所有原始定义的注解-->
+          <option>-keep class com.fasterxml.jackson.** { *; }</option>
+          <option>-keep class org.json.JSONObject.** {** put(java.lang.String,java.util.Map);}</option>
+          <option>-dontwarn com.fasterxml.jackson.databind.**</option>
+          <option>-dontwarn com.fasterxml.jackson.**</option>
+        </options>
+        <injarNotExistsSkip>true</injarNotExistsSkip>
+        <libs>
+          <lib>${java.home}/lib/rt.jar</lib>
+        </libs>
+      </configuration>
+      <dependencies>
+        <dependency>
+          <groupId>com.guardsquare</groupId>
+          <artifactId>proguard-base</artifactId>
+          <version>${proguard.version}</version>
+        </dependency>
+      </dependencies>
+    </plugin>
     <plugin>
       <groupId>org.apache.maven.plugins</groupId>
       <artifactId>maven-assembly-plugin</artifactId>

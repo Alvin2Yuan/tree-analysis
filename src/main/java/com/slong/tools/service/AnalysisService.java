@@ -20,13 +20,17 @@ import java.util.*;
 
 public class AnalysisService {
 
-    private static String jdbcUrl = "jdbc:sqlite:tree.db";
+    public static String jdbcUrl = "jdbc:sqlite:src/main/resources/tree.db";
     private Map<String, String> rgMap = new LinkedHashMap<String, String>();
     private Map<String, String> trMap = new LinkedHashMap<String, String>();
 
-    private Map<String, Integer> treeGroupOrderByMap = new LinkedHashMap<String, Integer>();
+    private static Map<String, Integer> treeGroupOrderByMap = new LinkedHashMap<String, Integer>();
 
-    public void process2(String excelPath) throws SQLException, IOException {
+    private static Map<String, String> treeDensityGroupMap = new LinkedHashMap<String, String>();
+
+    public Connection connection=null;
+
+    public void process2(String excelPath,String outPath) throws SQLException, IOException {
         File excel = new File(excelPath);
         if (excel.isDirectory()) {
             for (File file : excel.listFiles()) {
@@ -143,15 +147,16 @@ public class AnalysisService {
                         validateTr(origin, fqll, lz, array, newArray, dataRow, newDataList);
 
                     } else {
-                        //获取单一树种大于等于5的
-                        String tree = getRgArrays(origin, array);
-                        if (tree == null || tree.length() == 0) {
+                        //1.是否有单一树种5层及5层以上的，没有则报错
+                        List<String> tree = getRgArrays(origin, array);
+                        if (tree.isEmpty()) {
                             Map<String, Object> map2 = new LinkedHashMap<String, Object>(dataRow);
                             map2.put("执行结果", "错误");
                             map2.put("处理树种组成", "");
                             newDataList.add(map2);
                         } else {
-                            String[] newArray = new String[]{tree};
+                            String[] newArray = new String[tree.size()];
+                            tree.toArray(newArray);
                             validateRg(origin, fqll, lz, array, newArray, dataRow, newDataList);
                         }
 
@@ -159,9 +164,14 @@ public class AnalysisService {
 
 
                 }
-                File wf = new File("D:\\zbj\\tree\\测试.xlsx");
-                FileUtils.copyFile(file, wf);
-                ExcelReader excelReader = ExcelUtil.getReader(wf);
+                File wf = new File(outPath);
+                String destPath =wf.getAbsolutePath() ;
+                if(wf.isDirectory()){
+                    destPath+="/"+file.getName();
+                }
+                File destFile = new File(destPath);
+                FileUtils.copyFile(file, destFile);
+                ExcelReader excelReader = ExcelUtil.getReader(destFile);
 
                 ExcelWriter writer = excelReader.getWriter();
                 int colCount = writer.getColumnCount();
@@ -179,13 +189,16 @@ public class AnalysisService {
                     Map<String, Object> rowData = newDataList.get(i);
                     String result = rowData.get("执行结果").toString();
                     String result2 = rowData.get("处理树种组成").toString();
+                    String origin = rowData.get("起源").toString();
+                    origin = origin.replaceAll("林", "");
                     int fhxj = Integer.parseInt(rowData.get("伐后胸径").toString());
                     if ("错误".equals(result) || "错误".equals(result2)) {
                         checkList.add("错误");
                     } else {
                         checkList.add("正确");
                     }
-                    Integer minValue = getZdmd(result2, fhxj);
+                    //最低经营密度
+                    Integer minValue = getZdmd(origin,result2, fhxj);
                     writer.writeCellValue(colCount + 1, i + 1, minValue);
                     writer.writeCellValue(colCount + 2, i + 1, result);
                     writer.writeCellValue(colCount + 3, i + 1, result2);
@@ -236,20 +249,12 @@ public class AnalysisService {
         }
     }
 
-    private Integer getZdmd(String szzc, int fhxj) throws SQLException {
+    private Integer getZdmd(String origin,String szzc, int fhxj) throws SQLException {
         if (null == szzc || "".equals(szzc)) {
             return null;
         }
-        if(szzc.startsWith("2天臭2天杨1天红")){
-            System.out.println(szzc);
-        }
-        String origin = "天然";
-        if (szzc.contains("人")) {
-            szzc = szzc.replaceAll("人", "");
-            origin = "人工";
-        } else {
-            szzc = szzc.replaceAll("天", "");
-        }
+        szzc = szzc.replaceAll("人", "");
+        szzc = szzc.replaceAll("天", "");
         String[] szzcArray = null;
         if (szzc.length() > 3) {
             szzcArray = szzc.split("(?=\\d{1,100}[\\u4e00-\\u9fa5])");
@@ -257,10 +262,23 @@ public class AnalysisService {
             szzcArray = new String[]{szzc};
         }
         Map<String, Integer> map = new HashMap<String, Integer>();
+        System.out.println("经营密度:"+szzc);
         for (String tree : szzcArray) {
             String treeName = tree.replaceAll("\\d", "");
             String treeNum = tree.replaceAll("[\\u4e00-\\u9fa5]", "");
-            map.put(treeName, Integer.valueOf(treeNum));
+//            map.put(treeName, Integer.valueOf(treeNum));
+            String treeDensityName = treeDensityGroupMap.get(treeName);
+            if(null==treeDensityName){
+                continue;
+            }
+            Integer total=Integer.parseInt(treeNum);
+            if(map.containsKey(treeDensityName)){
+                total+=map.get(treeDensityName);
+            }
+            map.put(treeDensityName,total);
+        }
+        if(map.isEmpty()){
+            return null;
         }
         List<Map.Entry<String, Integer>> list = new ArrayList<Map.Entry<String, Integer>>(map.entrySet());
         Collections.sort(list, new Comparator<Map.Entry<String, Integer>>() {
@@ -275,21 +293,8 @@ public class AnalysisService {
             Integer val1 = list.get(0).getValue();
             Integer val2 = list.get(1).getValue();
             String groupName = null;
-            if (val1 == val2) {
-                Map<String, List<String>> treeAndGroupMap = new LinkedHashMap<String, List<String>>();
-                for (Map.Entry<String, Integer> entry : list) {
-                    String treeGroup = getGroup(origin, entry.getKey());
-                    List<String> treeList = new ArrayList<String>();
-                    if (treeAndGroupMap.containsKey(treeGroup)) {
-                        treeList = treeAndGroupMap.get(treeGroup);
-                    }
-                    treeList.add(entry.getKey());
-                    treeAndGroupMap.put(treeGroup, treeList);
-                }
-                groupName = getOrderByGroup(origin, list);
-                List<String> orderTree = treeAndGroupMap.get(groupName);
-                //取占比大的树种组中的树种
-                treeName = orderTree.get(0);
+            if (val1.equals(val2)) {
+                return null;
             } else {
                 treeName = list.get(0).getKey();
             }
@@ -306,6 +311,11 @@ public class AnalysisService {
         Map<String, Integer> treeGroupMap = new HashMap<String, Integer>();
         //先分针和阔比对占比 当出现相同时 按针叶优先
         for (Map.Entry<String, Integer> entry : list) {
+            System.out.println("起源:"+origin+"树种:"+entry.getKey());
+            if("天然".equals(origin)&&"樟".equals(entry.getKey())){
+                System.out.println("跳过 樟子松，起源:"+origin+"树种:"+entry.getKey());
+                continue;
+            }
             String treeGroup = getGroup(origin, entry.getKey());
             Integer treeNum = entry.getValue();
             String keyName="针";
@@ -317,6 +327,10 @@ public class AnalysisService {
             }
             treeGroupMap.put(keyName, treeNum);
         }
+        if(treeGroupMap.isEmpty()){
+
+            return  getGroup(origin, list.get(0).getKey());
+        }
         Integer totalZ= treeGroupMap.get("针")!=null? treeGroupMap.get("针"):0;
         Integer totalK= treeGroupMap.get("阔")!=null?treeGroupMap.get("阔"):0;
         String key="阔";
@@ -326,6 +340,9 @@ public class AnalysisService {
         treeGroupMap=new LinkedHashMap<String, Integer>();
         //先对树种组 分组计算占比
         for (Map.Entry<String, Integer> entry : list) {
+            if("天然".equals(origin)&&"樟".equals(entry.getKey())){
+                continue;
+            }
             String treeGroup = getGroup(origin, entry.getKey());
             if(!treeGroup.contains(key)){
                 continue;
@@ -337,6 +354,9 @@ public class AnalysisService {
             treeGroupMap.put(treeGroup, treeNum);
         }
         List<Map.Entry<String, Integer>> list2 = new ArrayList<Map.Entry<String, Integer>>(treeGroupMap.entrySet());
+
+
+
         Collections.sort(list2, new Comparator<Map.Entry<String, Integer>>() {
             public int compare(Map.Entry<String, Integer> o1, Map.Entry<String, Integer> o2) {
                 return o2.getValue().compareTo(o1.getValue());
@@ -347,7 +367,7 @@ public class AnalysisService {
             Integer val1 = list2.get(0).getValue();
             Integer val2 = list2.get(1).getValue();
             // 还需要进一步 判断 树种组的排序顺序 再获取到最终的树种组
-            if (val1 == val2) {
+            if (val1.equals(val2)) {
                 treeGroupMap = new HashMap<String, Integer>();
                 for (Map.Entry<String, Integer> entry : list2) {
                     String groupName = entry.getKey();
@@ -358,7 +378,7 @@ public class AnalysisService {
                System.out.println(list3);
                 Collections.sort(list3, new Comparator<Map.Entry<String, Integer>>() {
                     public int compare(Map.Entry<String, Integer> o1, Map.Entry<String, Integer> o2) {
-                        return o2.getValue().compareTo(o1.getValue());
+                        return o1.getValue()-o2.getValue();
                     }
                 });
                 return list3.get(0).getKey();
@@ -438,7 +458,7 @@ public class AnalysisService {
         if ("人工".equals(origin) && "杨".equals(treeName)) {
             sql += " and 树种 like '%人%'";
         }
-        ResultSet resultSet = SqliteUtils.executeQuery(jdbcUrl, sql);
+        ResultSet resultSet = SqliteUtils.executeQuery(connection, sql);
         List<JSONObject> list = new ArrayList<JSONObject>();
         while (resultSet.next()) {
             String tree = resultSet.getString("树种");
@@ -454,6 +474,7 @@ public class AnalysisService {
             data.put("max", max);
             list.add(data);
         }
+        resultSet.close();
 
         return list.size() > 0 ? list.get(0) : null;
     }
@@ -482,16 +503,17 @@ public class AnalysisService {
         return groupz;
     }
 
-    private String getRgArrays(String origin, String[] array) {
-
+    private List<String> getRgArrays(String origin, String[] array) {
+        List<String> treeList = new ArrayList<String>();
         for (String tree : array) {
             String treeName = tree.replaceAll("\\d", "");
             String treeNum = tree.replaceAll("[\\u4e00-\\u9fa5]", "");
             if (Integer.valueOf(treeNum) >= 5) {
-                return tree;
+                treeList.add(treeName);
             }
         }
-        return null;
+
+        return treeList;
     }
 
 
@@ -509,45 +531,45 @@ public class AnalysisService {
         boolean flag = true;
         StringBuffer removeTree = new StringBuffer();
         Map<String, JSONObject> groupMap = new LinkedHashMap<String, JSONObject>();
-        for (String t : array) {
-
-            String tree = t.replaceAll("\\d", "");
-            String treeNum = t.replaceAll("[\\u4e00-\\u9fa5]", "");
-            //1.按单个树种查询，使用所属起源直接查询
-            String group = getGroup(origin, tree);
-
-            boolean result = check(tree, group, origin, fqll, lz);
-            String realOrigin = "";
-            //2.如果树种不符合林龄要求的，去掉
-            if (result) {
-                realOrigin = origin.substring(0, 1);
-            } else {
-                removeTree.append(t);
-                continue;
+        //1.根据针阔分组，获取需要做比对的树种组
+        Map<String, Integer> map = new HashMap<String, Integer>();
+        Map<String, List<String>> groupNameMap = new HashMap<String, List<String>>();
+        for (String tree : array) {
+            String treeName = tree.replaceAll("\\d", "");
+            String treeNum = tree.replaceAll("[\\u4e00-\\u9fa5]", "");
+            map.put(treeName, Integer.valueOf(treeNum));
+            String groupName = getGroup(origin, treeName);
+//            if("樟".equals(treeName)){
+//                continue;
+//            }
+            List<String> treeList = new ArrayList<String>();
+            if(groupNameMap.containsKey(groupName)){
+                treeList=groupNameMap.get(groupName);
             }
-            //3.符合林龄要求的，树种按树种组相加
-            JSONObject data = new JSONObject();
-            if (groupMap.containsKey(group)) {
-                data = groupMap.get(group);
-            }
-            Integer total = data.getIntValue("total");
-            total += Integer.valueOf(treeNum);
-            data.put("total", total);
-            data.put("group", group);
-            data.put("tree", tree);
-            data.put("realOrigin", realOrigin);
-            groupMap.put(group, data);
+            treeList.add(treeName);
+            groupNameMap.put(groupName,treeList);
         }
-        //4.拿到按树种组分后的map后开始比对
-
-        String originName = "天";
-
-        boolean tag = isGroupOrderByValidate(groupMap);
+        List<Map.Entry<String, Integer>> list = new ArrayList<Map.Entry<String, Integer>>(map.entrySet());
+        String groupName = getOrderByGroup(origin,list);
+        //2.检查获取的树种组中，包含的林龄是否正确
+        List<String> treeList =  groupNameMap.get(groupName);
+        for(String treeName : treeList){
+            boolean result = check(treeName, groupName, origin, fqll, lz);
+            if(!result){
+                flag=false;
+                break;
+            }
+        }
+       String originName="天";
         String checkResult = "正确";
-        if (tag) {
+        if (flag) {
             for (String t : originArray) {
                 String tree = t.replaceAll("\\d", "");
                 String treeNum = t.replaceAll("[\\u4e00-\\u9fa5]", "");
+                if("樟".equals(tree)){
+                    newszzc += treeNum + "人" + tree;
+                    continue;
+                }
                 newszzc += treeNum + originName + tree;
             }
         } else {
@@ -555,14 +577,17 @@ public class AnalysisService {
         }
 
         System.out.println("执行结果:" + newszzc);
-        Map<String, Object> map = new LinkedHashMap<String, Object>(dataMap);
-        map.put("执行结果", checkResult);
-        map.put("处理树种组成", newszzc);
-        newDataList.add(map);
+        Map<String, Object> resultMap = new LinkedHashMap<String, Object>(dataMap);
+        resultMap.put("执行结果", checkResult);
+        resultMap.put("处理树种组成", newszzc);
+        newDataList.add(resultMap);
     }
 
     private static boolean isGroupOrderByValidate(Map<String, JSONObject> groupMap) {
         boolean tag = true;
+        if(null==groupMap||groupMap.isEmpty()){
+            tag=false;
+        }
         for (Map.Entry<String, JSONObject> entry : groupMap.entrySet()) {
 
             String group = entry.getKey();
@@ -667,31 +692,65 @@ public class AnalysisService {
         return tag;
     }
 
+    private static String getSortGroup(List<String> groupNames) {
+        Map<String,Integer> treeGroupMap = new HashMap<String, Integer>();
+        for (String groupName : groupNames) {
+            Integer orderBy = treeGroupOrderByMap.get(groupName);
+            treeGroupMap.put(groupName, orderBy);
+        }
+        List<Map.Entry<String, Integer>> list = new ArrayList<Map.Entry<String, Integer>>(treeGroupMap.entrySet());
+        System.out.println(list);
+        Collections.sort(list, new Comparator<Map.Entry<String, Integer>>() {
+            public int compare(Map.Entry<String, Integer> o1, Map.Entry<String, Integer> o2) {
+                return o1.getValue()-o2.getValue();
+            }
+
+        });
+        return list.get(0).getKey();
+    }
+
+
     private void validateRg(String origin, int fqll, String lz, String[] originArray, String[] array, Map<String, Object> dataMap, List<Map<String, Object>> newDataList) throws SQLException {
         String newszzc = "";
         boolean flag = true;
         StringBuffer removeTree = new StringBuffer();
         Map<String, JSONObject> groupMap = new LinkedHashMap<String, JSONObject>();
-        //查看单一树种树龄是否符号
+        //2.查看单一树种树龄是否符号
+        Map<String,List<String>> groupNameMap=new LinkedHashMap<String, List<String>>();
         for (String t : array) {
             String tree = t.replaceAll("\\d", "");
             String treeNum = t.replaceAll("[\\u4e00-\\u9fa5]", "");
             //1.按单个树种查询，使用所属起源直接查询
             String group = getGroup(origin, tree);
-            boolean result = check(tree, group, origin, fqll, lz);
-            String realOrigin = "";
-            //2.如果树种不符合林龄要求的，去掉
+            List<String> treeList = new ArrayList<String>();
+            if(groupNameMap.containsKey(group)){
+                treeList=  groupNameMap.get(group);
+            }
+            treeList.add(tree);
+            groupNameMap.put(group,treeList);
+//            boolean result = check(tree, group, origin, fqll, lz);
+//            String realOrigin = "";
+//            //2.如果树种不符合林龄要求的，去掉
+//            if (!result) {
+//                flag = false;
+//                break;
+//            }
+        }
+        String getSortGroupName=getSortGroup(new ArrayList<String>(groupNameMap.keySet()));
+        //获取到要比对的 树种组，然后校验树种组中所含树种的林龄是否正确
+        List<String> treeList= groupNameMap.get(getSortGroupName);
+        for(String tree:treeList){
+            boolean result = check(tree, getSortGroupName, origin, fqll, lz);
             if (!result) {
                 flag = false;
                 break;
             }
         }
-
         //4.拿到按树种组分后的map后开始比对
         String originName = "人";
-        boolean tag = isGroupOrderByValidate(groupMap);
+//        boolean tag = isGroupOrderByValidate(groupMap);
         String checkResult = "正确";
-        if (tag) {
+        if (flag) {
             for (String t : originArray) {
                 String tree = t.replaceAll("\\d", "");
                 String treeNum = t.replaceAll("[\\u4e00-\\u9fa5]", "");
@@ -1018,10 +1077,10 @@ public class AnalysisService {
         return treeGroup;
     }
 
-    private void getTreeMap() throws SQLException {
+    public void getTreeMap() throws SQLException {
         String sql = "select * from origin";
 
-        ResultSet resultSet = SqliteUtils.executeQuery(jdbcUrl, sql);
+        ResultSet resultSet = SqliteUtils.executeQuery(connection, sql);
 
         while (resultSet.next()) {
             String tree = resultSet.getString("树种");
@@ -1035,32 +1094,58 @@ public class AnalysisService {
             }
 
         }
+        resultSet.close();
     }
 
     private int countTreeGroup(JSONObject tree) throws SQLException {
-        String sql = "SELECT count(*) from tree_group where " +
+        String sql = "SELECT * from tree_group where " +
                 "   树种组 like '%" + tree.getString("树种组") + "' and 起源='" + tree.getString("起源") + "'" +
-                "  and 起始林龄<=" + tree.getInteger("林龄") + " and 截止林龄>=" + tree.getInteger("林龄") +
+//                "  and 起始林龄>=" + tree.getInteger("林龄")+
                 "  and 龄组='" + tree.getString("龄组") + "'";
+//                if(!"过熟林".equals(tree.getString("龄组"))){
+//                    sql+= " and 截止林龄<=" + tree.getInteger("林龄") ;
+//                }
+
+
         if (null != tree.getString("树种")) {
             sql += " and 树种 like '" + tree.getString("树种") + "%' ";
         }
 
 
         System.out.println(sql);
-        ResultSet resultSet = SqliteUtils.executeQuery(jdbcUrl, sql);
-        int count = resultSet.getInt(1);
-        return count;
+        ResultSet resultSet = SqliteUtils.executeQuery(connection, sql);
+//        int count = resultSet.getInt(1);
+        int start= resultSet.getInt("起始林龄");
+        int end=resultSet.getInt("截止林龄");
+        resultSet.close();
+        int ll= tree.getInteger("林龄");
+
+        if(start<=ll&&ll<=end){
+            return 1;
+        }
+        return 0;
     }
 
-    private void queryTreeGroup() throws SQLException {
+    public void queryTreeGroup() throws SQLException {
         String sql="SELECT 树种组,order_by from tree_group  GROUP BY 树种组 ORDER BY order_by";
-        ResultSet resultSet = SqliteUtils.executeQuery(jdbcUrl, sql);
+        ResultSet resultSet = SqliteUtils.executeQuery(connection, sql);
         while (resultSet.next()) {
             String group = resultSet.getString("树种组");
             Integer orderBy = resultSet.getInt("order_by");
             treeGroupOrderByMap.put(group, orderBy);
         }
+        resultSet.close();
+    }
+
+    public void queryTreeDensityGroup() throws SQLException {
+        String sql="SELECT 树种,分组名 from tree_density_group ";
+        ResultSet resultSet = SqliteUtils.executeQuery(connection, sql);
+        while (resultSet.next()) {
+            String treeName = resultSet.getString("树种");
+            String groupName = resultSet.getString("分组名");
+            treeDensityGroupMap.put(treeName, groupName);
+        }
+        resultSet.close();
     }
 
     /**
@@ -1081,12 +1166,14 @@ public class AnalysisService {
 
     public static void main(String[] args) throws Exception {
         String dbFile = AnalysisService.class.getClassLoader().getResource("tree.db").getFile();
-        jdbcUrl = "jdbc:sqlite:src/main/resources/tree.db";
+//        jdbcUrl = "jdbc:sqlite:src/main/resources/tree.db";
         String excelPath = "D:\\test\\tree\\excel";
+        String outPath="D:\\zbj\\tree\\测试.xlsx";
 //        String excelPath = "D:\\zbj\\tree\\excel";
         AnalysisService service = new AnalysisService();
         service.getTreeMap();
         service.queryTreeGroup();
-        service.process2(excelPath);
+        service.queryTreeDensityGroup();
+        service.process2(excelPath,outPath);
     }
 }

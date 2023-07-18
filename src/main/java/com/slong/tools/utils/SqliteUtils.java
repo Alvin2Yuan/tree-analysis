@@ -90,7 +90,7 @@ public class SqliteUtils {
     public static ResultSet executeQuery(String url, String sql) throws SQLException {
         Statement statement = null;
         try {
-            Connection conn = getConnection(url);
+            Connection   conn = getConnection(url);
             statement = conn.createStatement();
             ResultSet res = statement.executeQuery(sql);
             return res;
